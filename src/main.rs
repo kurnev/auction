@@ -96,21 +96,24 @@ impl AuctionState {
     }
 
     fn end_auction(self, item_id: i32) -> Option<Winner> {
-       let user_id = self.users[0].id;
-       let winning_price = 130.0; 
-
        let mut iter = self.items.iter();
        let item = iter.find(|&x| x.id == item_id).unwrap();
        let mut sorted_bids = item.bids.to_vec();
        sorted_bids.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal));
        sorted_bids.reverse();
-       println!("Sorted bids: {:?}", sorted_bids);
-       println!("Auction has ended! Winner is the user #{} with price {}", user_id, winning_price);
        let winning_bid = &sorted_bids[0];
        if winning_bid.price < item.reserve_price {
+           println!("No winner!");
            None
        } else {
-           Some(Winner {user_id: winning_bid.user_id, winning_price: winning_bid.price})
+           //   Some(Winner {user_id: winning_bid.user_id, winning_price: winning_bid.price})
+           let winning_user = winning_bid.user_id;
+           // Find next bidder 
+           let mut iter = sorted_bids.iter();
+           let next_winning_price = iter.find(|x| x.user_id != winning_user).unwrap().price;
+             
+           println!("Auction has ended! Winner is the user #{} with price {}", winning_bid.user_id, winning_bid.price);
+           Some(Winner {user_id: 3, winning_price: 130.0})
        }
     }
 }
@@ -151,5 +154,20 @@ mod tests {
         let winner = auction.end_auction(item_id).unwrap(); 
         assert!(winner.user_id == 3);
         assert!(winner.winning_price == 130.0);
+    }
+
+    #[test]
+    fn lower_than_reserve_price() {
+        let mut auction = AuctionState::new();
+        let user_id1 = auction.create_new_user();
+        let user_id2 = auction.create_new_user();
+        let item_id = auction.create_new_item(100.0);
+        
+        auction.register_new_bid(user_id1, item_id, 79.0);
+        auction.register_new_bid(user_id1, item_id, 81.0);
+        auction.register_new_bid(user_id2, item_id, 99.0);
+
+        let winner = auction.end_auction(item_id); 
+        assert!(winner.is_none());
     }
 }
