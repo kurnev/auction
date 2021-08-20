@@ -1,17 +1,24 @@
 use crate::bid::Bid;
+use std::cell::Cell;
+
+thread_local!(static ITEM_ID: Cell<usize> = Cell::new(0));
+
 pub struct Item {
-    pub id: i32,
+    pub id: usize,
     pub reserve_price: f32,
     pub bids: Vec<Bid>,
 }
 
 impl Item {
-    pub fn new(id: i32, reserve_price: f32) -> Item {
-        let bids: Vec<Bid> = Vec::new();
-        Item {
-            id,
-            reserve_price,
-            bids,
-        }
+    pub fn new(reserve_price: f32) -> Item {
+        ITEM_ID.with(|thread_id| {
+            let id = thread_id.get();
+            thread_id.set(id + 1);
+            Item {
+                id,
+                reserve_price,
+                bids: Vec::new(),
+            }
+        })
     }
 }

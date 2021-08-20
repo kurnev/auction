@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::slice::Iter;
 
 use crate::bid::Bid;
 use crate::bid::BidResultCode;
@@ -18,32 +19,22 @@ impl AuctionState {
         AuctionState { users, items }
     }
 
-    pub fn create_new_user(&mut self) -> i32 {
-        let last_user = self.users.last();
-        let user_id: i32;
-        match last_user {
-            Some(user) => user_id = user.id,
-            None => user_id = 0,
-        }
-        let new_user = User::new(user_id);
-        self.users.push(new_user);
+    pub fn create_new_user(&mut self) -> usize {
+        self.users.push(User::new());
         self.users.last().unwrap().id
     }
 
-    // TODO: create generic for creating stuff
-    pub fn create_new_item(&mut self, reserve_price: f32) -> i32 {
-        let last_item = self.items.last();
-        let item_id: i32;
-        match last_item {
-            Some(item) => item_id = item.id,
-            None => item_id = 0,
-        }
-        let new_item = Item::new(item_id, reserve_price);
-        self.items.push(new_item);
+    pub fn create_new_item(&mut self, reserve_price: f32) -> usize {
+        self.items.push(Item::new(reserve_price));
         self.items.last().unwrap().id
     }
 
-    pub fn register_new_bid(&mut self, user_id: i32, item_id: i32, price: f32) -> BidResultCode {
+    pub fn register_new_bid(
+        &mut self,
+        user_id: usize,
+        item_id: usize,
+        price: f32,
+    ) -> BidResultCode {
         if price == 0.0 {
             return BidResultCode::BidIsNull;
         };
@@ -51,26 +42,12 @@ impl AuctionState {
         let item = iter.find(|x| x.id == item_id);
         match item {
             Some(item) => {
-                let last_bid = item.bids.last();
-                let bid_id: i32;
-                // TODO: add id automatically
-                match last_bid {
-                    Some(bid) => bid_id = bid.id,
-                    None => bid_id = 0,
-                };
-                let bid: Bid = Bid {
-                    id: bid_id,
-                    user_id,
-                    price,
-                };
+                let bid: Bid = Bid::new(user_id, price);
                 let lowest_bid_from_same_user = item
                     .bids
                     .iter()
                     .filter(|x| x.user_id == user_id)
-                    .min_by(|a, b| {
-                        // a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal)
-                        a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal)
-                    });
+                    .min_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal));
                 match lowest_bid_from_same_user {
                     Some(lowest_bid) => {
                         if lowest_bid.price < price {
@@ -92,43 +69,84 @@ impl AuctionState {
         }
     }
 
-    pub fn end_auction(self, item_id: i32) -> Option<Winner> {
-        let mut iter = self.items.iter();
-        let item = iter.find(|&x| x.id == item_id).unwrap();
-        let mut sorted_bids = item.bids.to_vec();
-        sorted_bids.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal));
-        sorted_bids.reverse();
-        let winning_bid = &sorted_bids[0];
-        if winning_bid.price < item.reserve_price {
-            println!("No winner!");
-            None
-        } else {
-            let winning_user_id = winning_bid.user_id;
-            let mut iter = sorted_bids.iter();
-            let next_winning_bid = iter.find(|x| x.user_id != winning_user_id);
+    pub fn end_auction(&mut self, item_id: usize) -> Option<Winner> {
+        let item = self.items.iter().find(|&x| x.id == item_id);
+        match item {
+            Some(item) => {
+                let mut sorted_bids = item.bids.to_vec();
+                sorted_bids
+                    .sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap_or(Ordering::Equal));
+                sorted_bids.reverse();
 
-            match next_winning_bid {
-                Some(bid) => {
-                    println!(
-                        "Auction has ended! Winner is the user #{} with price {}",
-                        winning_bid.user_id, winning_bid.price
-                    );
-                    return Some(Winner {
-                        user_id: winning_user_id,
-                        winning_price: bid.price,
-                    });
-                }
-                None => {
-                    println!(
-                        "Auction has ended! Winner is the user #{} with price {}",
-                        winning_bid.user_id, winning_bid.price
-                    );
-                    return Some(Winner {
-                        user_id: winning_user_id,
-                        winning_price: item.reserve_price,
-                    });
+                let winning_bid = &sorted_bids.get(0);
+
+                match winning_bid {
+                    Some(winning_bid) => {
+                        if winning_bid.price < item.reserve_price {
+                            // Highest bid is lower than reserve price - no winner
+                            AuctionState::report_no_winner()
+                        } else {
+                            let mut winning_user_id = winning_bid.user_id;
+                            let mut iter = sorted_bids.iter();
+                            let next_winning_bid = iter.find(|x| x.user_id != winning_user_id);
+
+                            // Check if there are buyers with the same highest bid - first one is a winner
+                            let first_highest_bid = iter
+                                .filter(|x| x.price == winning_bid.price)
+                                .min_by_key(|&x| x.id);
+
+                            match first_highest_bid {
+                                Some(bid) => {
+                                    if bid.user_id != winning_user_id {
+                                        winning_user_id = bid.user_id;
+                                    }
+                                }
+                                _ => (),
+                            }
+
+                            match next_winning_bid {
+                                Some(bid) => {
+                                    // Check that next bid is above the reserve price
+                                    if bid.price < item.reserve_price {
+                                        // Next bid is below reserve price - use reserve price as winning price
+                                        AuctionState::report_winner(
+                                            winning_user_id,
+                                            item.reserve_price,
+                                        )
+                                    } else {
+                                        AuctionState::report_winner(winning_user_id, bid.price)
+                                    }
+                                }
+                                None => {
+                                    AuctionState::report_winner(winning_user_id, item.reserve_price)
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        // No bids - no winner
+                        AuctionState::report_no_winner()
+                    }
                 }
             }
+            // No such item with provided item_id - no winner
+            None => AuctionState::report_no_winner(),
         }
+    }
+
+    fn report_winner(user_id: usize, winning_price: f32) -> Option<Winner> {
+        println!(
+            "Auction has ended! Winner is the user #{} with price {}",
+            user_id, winning_price
+        );
+        Some(Winner {
+            user_id,
+            winning_price,
+        })
+    }
+
+    fn report_no_winner() -> Option<Winner> {
+        println!("No winner!");
+        None
     }
 }
